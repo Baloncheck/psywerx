@@ -36,7 +36,7 @@ class IrcViewTests(TestCase):
         response = self.client.get(url)
         self.assertContains(response, 'NO')
 
-        response = self.client.post(url)
+        response = self.client.post(url, {'notoken': 'passed'})
         self.assertContains(response, 'NO')
 
         response = self.client.post(url, {'token': 'wrongtoken'})

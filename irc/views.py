@@ -15,61 +15,58 @@ import hashlib
 import json
 
 
+def has_token(request):
+    if request.POST and request.POST.has_key('token') and request.POST["token"] == TOKEN:
+        return 1
+    return 0
+
 @csrf_exempt
 def irc_bot_add(request):
-    if request.POST:
-        if request.POST["token"] == TOKEN:
-            i = Irc()
-            result = i.parse(request.POST['raw'], request.POST['channel'])
-            return HttpResponse(result)
-    return HttpResponse("NO")
-    #return render_to_response('404.html', context_instance=RequestContext(request))
+    if not has_token(request):
+        return HttpResponse("NO")
+    result = Irc().parse(request.POST['raw'], request.POST['channel'])
+    return HttpResponse(result)
 
 @csrf_exempt
 def karma_add(request):
-    if request.POST:
-        if request.POST["token"] == TOKEN:
-            k = Karma()
-            k.nick = request.POST['nick']
-            k.channel = request.POST['channel']
-            k.save()
-            return HttpResponse("OK")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    Karma.objects.create(nick = request.POST['nick'], channel = request.POST['channel'])
+    return HttpResponse("OK")
 
 @csrf_exempt
 def karma_nick(request):
-    if request.POST:
-        if request.POST["token"] == TOKEN:
-            if "nick" in request.POST:
-                nick = request.POST['nick'][:4]
-                karmaQuery = Karma.objects.filter(nick__startswith=nick, channel__iexact=request.POST['channel'], time__year=datetime.now().year)
-                nicks = set(k.nick for k in karmaQuery)
-                if request.POST['nick'] in nicks:
-                    nicks.remove(request.POST['nick'])
-                combined_karma = len(karmaQuery)
-                karma = len(Karma.objects.filter(nick=request.POST['nick'], channel__iexact=request.POST['channel'], time__year=datetime.now().year))
-                if combined_karma > karma:
-                    karma = ("%s (or %s with his other nicknames - " + ", ".join(nicks) + ")") % (karma, combined_karma)
-                else:
-                    karma = "%s" %karma
-            else:
-                d = defaultdict(int)
-                dn = {}
-                for o in Karma.objects.all().filter(channel__iexact = request.POST['channel'], time__year = datetime.now().year).values('nick').annotate(karma=Count('nick')).order_by('-karma'):
-                    if o['karma'] > d[o['nick'][:4]]:
-                        dn[o['nick'][:4]] = o['nick']
-                    d[o['nick'][:4]] += o['karma']
+    if not has_token(request):
+        return HttpResponse("NO")
+    if request.POST.has_key('nick'):
+        nick = request.POST['nick']
+        karmaQuery = Karma.objects.filter(nick__startswith = nick[:4], channel__iexact = request.POST['channel'], time__year = datetime.now().year)
+        nicks = set(k.nick for k in karmaQuery)
+        if nick in nicks:
+            nicks.remove(nick)
+        combined_karma = len(karmaQuery)
+        karma = len(Karma.objects.filter(nick = nick, channel__iexact = request.POST['channel'], time__year = datetime.now().year))
+        if combined_karma > karma:
+            karma = ("%s (or %s with his other nicknames - " + ", ".join(nicks) + ")") % (karma, combined_karma)
+        else:
+            karma = "%s" %karma
+    else:
+        d = defaultdict(int)
+        dn = {}
+        for o in Karma.objects.all().filter(channel__iexact = request.POST['channel'], time__year = datetime.now().year).values('nick').annotate(karma=Count('nick')).order_by('-karma'):
+            if o['karma'] > d[o['nick'][:4]]:
+                dn[o['nick'][:4]] = o['nick']
+            d[o['nick'][:4]] += o['karma']
 
-                import operator
-                sd = sorted(d.iteritems(), key=operator.itemgetter(1), reverse=True)
-                k = []
-                for s in sd:
-                    k.append({'nick': dn[s[0]], 'karma': s[1]})
+        import operator
+        sd = sorted(d.iteritems(), key=operator.itemgetter(1), reverse=True)
+        k = []
+        for s in sd:
+            k.append({'nick': dn[s[0]], 'karma': s[1]})
 
-                karma = json.dumps(k)
+        karma = json.dumps(k)
 
-            return HttpResponse(karma)
-    return HttpResponse("NO")
+    return HttpResponse(karma)
 
 def dump(request):
     out = [{"message": a.message, "time": str(a.time), "nick": a.nick, \
@@ -84,19 +81,18 @@ def irc(request, page=1, link_page=1):
     def _remove_duplicate_nicks(karma):
         d = {}
         for k in karma:
-            if k['nick'][:4] not in d:
-                d[k['nick'][:4]] = {'nick': k['nick'], 'karma': k['karma']}
+            nick_start = k['nick'][:4]
+            if nick_start not in d:
+                d[nick_start] = {'nick': k['nick'], 'karma': k['karma']}
             else:
-                d[k['nick'][:4]]['karma'] += k['karma']
+                d[nick_start]['karma'] += k['karma']
         return sorted([d[dd] for dd in d], key=lambda k:k['karma'], reverse=True)[:5]
 
     # Set the cookie
-    if request.POST:
-
-        if request.POST.has_key('word') and hashlib.sha224(request.POST['word']).hexdigest() == MAGIC_WORD:
-            r = HttpResponseRedirect('.')
-            r.set_cookie("irctoken", COOKIE_TOKEN, 60*60*24*356*100)
-            return r
+    if request.POST and request.POST.has_key('word') and hashlib.sha224(request.POST['word']).hexdigest() == MAGIC_WORD:
+        r = HttpResponseRedirect('.')
+        r.set_cookie("irctoken", COOKIE_TOKEN, 60*60*24*356*100)
+        return r
 
     irc_token = request.COOKIES.get("irctoken", "")
 
@@ -134,55 +130,43 @@ def irc(request, page=1, link_page=1):
 
 @csrf_exempt
 def join(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        GroupMembers.join(request.POST['nick'], request.POST['group'], request.POST['offline'], request.POST['channel'])
-        return HttpResponse(json.dumps("ok"), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    GroupMembers.join(request.POST['nick'], request.POST['group'], request.POST['offline'], request.POST['channel'])
+    return HttpResponse(json.dumps("ok"), mimetype="application/json")
 
 @csrf_exempt
 def leave(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        GroupMembers.leave(request.POST['nick'], request.POST['group'], request.POST['channel'])
-        return HttpResponse(json.dumps("ok"), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    GroupMembers.leave(request.POST['nick'], request.POST['group'], request.POST['channel'])
+    return HttpResponse(json.dumps("ok"), mimetype="application/json")
 
 @csrf_exempt
 def leaveAll(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        GroupMembers.leaveAll(request.POST['nick'], request.POST['channel'])
-        return HttpResponse(json.dumps("ok"), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    GroupMembers.leaveAll(request.POST['nick'], request.POST['channel'])
+    return HttpResponse(json.dumps("ok"), mimetype="application/json")
 
 @csrf_exempt
 def groups(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        ret = GroupMembers.groups(request.POST['channel'])
-        return HttpResponse(json.dumps(', '.join(ret)), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    ret = GroupMembers.groups(request.POST['channel'])
+    return HttpResponse(json.dumps(', '.join(ret)), mimetype="application/json")
 
 @csrf_exempt
 def mygroups(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        ret = GroupMembers.mygroups(request.POST['channel'], request.POST['nick'])
-        return HttpResponse(json.dumps(', '.join(ret)), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    ret = GroupMembers.mygroups(request.POST['channel'], request.POST['nick'])
+    return HttpResponse(json.dumps(', '.join(ret)), mimetype="application/json")
 
 @csrf_exempt
 def mention(request):
-    if request.POST:
-        if request.POST["token"] != TOKEN:
-            return HttpResponse("NO")
-        members = GroupMembers.mention(request.POST['group'], request.POST['channel'])
-        out = [(m.nick, m.channel, m.offline) for m in members]
-        return HttpResponse(json.dumps(out), mimetype="application/json")
-    return HttpResponse("NO")
+    if not has_token(request):
+        return HttpResponse("NO")
+    members = GroupMembers.mention(request.POST['group'], request.POST['channel'])
+    out = [(m.nick, m.channel, m.offline) for m in members]
+    return HttpResponse(json.dumps(out), mimetype="application/json")
